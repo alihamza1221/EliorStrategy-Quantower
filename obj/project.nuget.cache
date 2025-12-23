@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "7sccvFRxkqw=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\mumar\\source\\repos\\EliorStrategy\\EliorStrategy.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\mumar\\.nuget\\packages\\microsoft.win32.systemevents\\10.0.1\\microsoft.win32.systemevents.10.0.1.nupkg.sha512",
+    "C:\\Users\\mumar\\.nuget\\packages\\system.drawing.common\\10.0.1\\system.drawing.common.10.0.1.nupkg.sha512"
+  ],
+  "logs": []
+}

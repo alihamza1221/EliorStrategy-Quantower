@@ -1,0 +1,12 @@
+C:\Quantower\Settings\Scripts\Indicators\EliorStrategy\EliorStrategy.deps.json
+C:\Quantower\Settings\Scripts\Indicators\EliorStrategy\EliorStrategy.dll
+C:\Quantower\Settings\Scripts\Indicators\EliorStrategy\EliorStrategy.pdb
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.csproj.AssemblyReference.cache
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.AssemblyInfoInputs.cache
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.AssemblyInfo.cs
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.csproj.CoreCompileInputs.cache
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.dll
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\refint\EliorStrategy.dll
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.pdb
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\ref\EliorStrategy.dll
