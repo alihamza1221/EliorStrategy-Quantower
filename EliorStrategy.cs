@@ -97,6 +97,7 @@ namespace EliorStrategy
             Long = 1,
             Short = 2
         }
+        private static readonly DateTime ExpiryUtc = new DateTime(2025, 12, 29, 0, 0, 0, DateTimeKind.Utc);
 
         [InputParameter("Trades Direction", 50, variants: new object[]
         {
@@ -122,7 +123,7 @@ namespace EliorStrategy
 
 
         private double prevST = double.NaN;
-        private int prevDir = 1; 
+        private int prevDir; 
 
         private struct STOut
         {
@@ -172,14 +173,20 @@ namespace EliorStrategy
         }
 
         private readonly List<SignalEvent> signals = new List<SignalEvent>();
+        private double prevUpperBand = double.NaN;
+        private double prevLowerBand = double.NaN;
 
+        private double barsSinceStart = 0;
         public EliorStrategy()
             : base()
         {
             // Defines indicator's name and description.
             Name = "EliorStrategy";
             Description = "My indicator's annotation";
-            AddLineSeries("mad", Color.Yellow, 1, LineStyle.Solid);
+            AddLineSeries("st up", Color.Violet, 1, LineStyle.Solid);
+            AddLineSeries("st down", Color.Green, 1, LineStyle.Solid);
+            AddLineSeries("EMA TF", Color.Orange, 1, LineStyle.Solid);
+
 
 
 
@@ -196,6 +203,9 @@ namespace EliorStrategy
         /// </summary>
         protected override void OnInit()
         {
+
+
+            Core.Loggers.Log($"started at : {DateTime.UtcNow} ");
             // Add your initialization code here
 
             this.isMadCalReq = true;
@@ -244,11 +254,11 @@ namespace EliorStrategy
             // SMA(volTF, len) over bars [0..len-1] using prev close from [i+1]
             for (int i = 0; i < len; i++)
             {
-                var bar = (HistoryItemBar)hist[i];
-                var prevBar = (HistoryItemBar)hist[i + 1];
+                
+                double prevBarColse = Close(i + 1);
 
-                double trValue = TR(prevBar.Close, bar);
-                double vol = VolTF(trValue, bar);
+                double trValue = TR(prevBarColse,High(i), Low(i), Close(i));
+                double vol = VolTF(trValue, Low(i));
 
                 sumVol += vol;
             }
@@ -256,53 +266,52 @@ namespace EliorStrategy
             double avg = sumVol / len;
 
             // _v is the CURRENT bar's volTF (bar 0)
-            var cur = (HistoryItemBar)hist[0];
-            var prev = (HistoryItemBar)hist[1];
-            double v = VolTF(TR(prev.Close, cur), cur);
+            var prev = Close(1);
+            double v = VolTF(TR(prev,High(), Low(),Close()),Low());
 
             return avg == 0.0 ? 0.0 : (v / avg) - 1.0;
         }
-        protected double GetTFRatio(HistoricalData hist, int len)
+        protected double GetTFRatio(int len)
         {
             // Need len bars + 1 previous-close bar
-            if (hist == null || len <= 0 || hist.Count < len + 2)
+            if (Count < len + 2)
                 return 0.0; // or double.NaN if you prefer Pine-like "na" during warmup
             //Core.Loggers.Log($"hist.Count : {hist.Count} ");
             double sumVol = 0.0;
 
             for (int i = 1; i <= len; i++)
             {
-                var bar = (HistoryItemBar)hist[i];
-                var prevBar = (HistoryItemBar)hist[i + 1];
-
-                double trValue = TR(prevBar.Close, bar);
-                double vol = VolTF(trValue, bar);
+                var prevBarClose = Close(i + 1);
+                
+                double trValue = TR(prevBarClose, High(i) , Low(i), Close(i));
+                double vol = VolTF(trValue, Low(i));
 
                 sumVol += vol;
             }
 
             double avg = sumVol / len;
+            //Core.Loggers.Log($"Avg VolTF over {len} bars: {avg} ");
+            var curClose = Close(1);
+            var prev = Close(2);
+            double v = VolTF(TR(prev,High(1), Low(1), curClose), Low(1));
 
-            // _v is the CURRENT bar's volTF (bar 0)
-            var cur = (HistoryItemBar)hist[1];
-            var prev = (HistoryItemBar)hist[2];
-            double v = VolTF(TR(prev.Close, cur), cur);
+            //Core.Loggers.Log($"**Current VolTF: {v}  cur close: {cur.Close}  prev close : {prev.Close}"  );
 
             return avg == 0.0 ? 0.0 : (v / avg) - 1.0;
         }
 
-        public static double VolTF(double tr, HistoryItemBar bar)
+        public static double VolTF(double tr, double barLow)
         {
-            double denom = Math.Max(Math.Abs(bar.Low), 1e-10);
+            double denom = Math.Max(Math.Abs(barLow), 1e-10);
             return (tr * 100.0) / denom;
         }
 
 
-        protected double TR(double prev_close, HistoryItemBar bar) 
+        protected double TR(double prev_close, double barHigh, double barLow, double barClose) 
         {
-            double tr = Math.Max(bar.High - bar.Low,
-            Math.Max(Math.Abs(bar.High - prev_close),
-                  Math.Abs(bar.Low - prev_close)));
+            double tr = Math.Max(barHigh - barLow,
+            Math.Max(Math.Abs(barHigh - prev_close),
+                  Math.Abs(barLow - prev_close)));
 
             return tr;
         }
@@ -316,16 +325,22 @@ namespace EliorStrategy
         /// <param name="args">Provides data of updating reason and incoming price.</param>
         protected override void OnUpdate(UpdateArgs args)
         {
-            if (args.Reason == UpdateReason.NewBar)
+            if (DateTime.UtcNow >= ExpiryUtc)
             {
-                this.isMadCalReq = true;
-                barCounter++;
+                // optional: log once (avoid spamming)
+                Core.Loggers.Log("EliorStrategy license expired (2025-12-29)."); 
+                return;
             }
 
-            if (isMadCalReq)
-            {
 
-                if(this.HistoricalData.Count < this.MadLen + 1)
+            SetValue(this.emaTF.GetValue(),2);
+
+
+
+                if (args.Reason == UpdateReason.NewBar )
+            {
+               // Core.Loggers.Log("New bar...");
+                if (this.HistoricalData.Count < this.MadLen + 1)
                     return;
                 double devSum = 0.0;
                 //Core.Loggers.Log($"Calculating MAD over {this.MadLen} bars." );
@@ -333,67 +348,113 @@ namespace EliorStrategy
                 {
                     var bar = (HistoryItemBar)this.HistoricalData[i];
                     double dev = Math.Abs(bar[this.Src] - this.mean.GetValue(i));
-                    if(double.IsNaN(dev)) return ;
-                    
+                    if (double.IsNaN(dev)) return;
+
                     devSum += dev;
                 }
                 this.prevMad = this.mad;
-                this.mad = devSum/ this.MadLen;
+                this.mad = devSum / this.MadLen;//
 
-                //Core.Loggers.Log($"Final MAD: {this.mad}" );
+                //Core.Loggers.Log($"Final MAD: {this.mad}");
                 this.isMadCalReq = false;
+                barCounter++;
+            }
+
+            if (args.Reason == UpdateReason.HistoricalBar)
+            {
+
+                //Core.Loggers.Log("history bar...");
+
+                if (this.HistoricalData.Count < this.MadLen)
+                    return;
+                double devSum = 0.0;
+                //Core.Loggers.Log($"Calculating MAD over {this.MadLen} bars." );
+                for (int i = 0; i < this.MadLen; i++)
+                {
+                    //Core.Loggers.Log($"mean({i})" + this.mean.GetValue(i) + $" count: {Count}");
+                    double dev = Math.Abs(Close(i) - this.mean.GetValue(i));
+                    if (double.IsNaN(dev)) return;
+
+                    devSum += dev;
+                }
+                this.prevMad = this.mad;
+                this.mad = devSum / this.MadLen;//
+
+                //Core.Loggers.Log($"Final MAD: {this.mad}");
+                this.isMadCalReq = false;
+                barCounter++;
             }
 
 
-            if ((args.Reason == UpdateReason.NewBar) || (args.Reason == UpdateReason.HistoricalBar))
-                this.sTOut  = SmaMadSuperTrend(this.Factor, this.HistoricalData[1][this.Src], this.HistoricalData[2][this.Src]);
-
-            //Core.Loggers.Log($"ST: {sTOut.ST} , Dir: {sTOut.Dir} " );
-
-
-            bool stLongNow = sTOut.Dir < 0;   // long regime
-            bool stShortNow = sTOut.Dir > 0;   // short regime
-
-            bool longStart = stLongNow && !prevStLongNow;
-            bool shortStart = stShortNow && !prevStShortNow;
-
-            bool longAllowed = this.Direction != TradesDirection.Short;
-            bool shortAllowed = this.Direction != TradesDirection.Long;
 
 
 
-            double close = Close(1);
 
-            double emaTF_val = emaTF.GetValue(1); 
 
-            double ema1H_val = ema1h.GetValue(1);  // in requirements it was mentioned to use closed candles for ema but in pine it's forming also
-
-            // Warmup guard
-            if (double.IsNaN(emaTF_val) || double.IsNaN(ema1H_val))
-                return;
-
-            bool emaGateL = !UseEMA || (close > emaTF_val && close > ema1H_val);
-            bool emaGateS = !UseEMA || (close < emaTF_val && close < ema1H_val);
 
 
             if ((args.Reason == UpdateReason.NewBar) || (args.Reason == UpdateReason.HistoricalBar))
             {
 
-                //Core.Loggers.Log("emaGateL: " + emaGateL + " , emaGateS: " + emaGateS + ", close : "  + close + " , ematf_val :"+ emaTF_val + " , ema1h_val :" + ema1H_val);
-                double rTF = GetTFRatio(this.HistoricalData, VolTFLen);
+                double close = Close(1);
+
+                double emaTF_val = emaTF.GetValue(1);
+
+                double ema1H_val = ema1h.GetValue(1);  // in requirements it was mentioned to use closed candles for ema but in pine it's forming also
+
+                // Warmup guard
+                if (double.IsNaN(emaTF_val) || double.IsNaN(ema1H_val))//
+                {
+                    prevMad = double.NaN;
+                    prevST = double.NaN;
+
+                    //Core.Loggers.Log($"!!!!   EMA values are NaN, skipping this bar. {mad}");
+                    mad = double.NaN;
+
+                    return;
+                }
+                this.sTOut = SmaMadSuperTrend(this.Factor, Close(1), Close(2),false);
+
+                bool stLongNow = sTOut.Dir < 0;   // long regime
+                bool stShortNow = sTOut.Dir > 0;   // short regime
+
+                bool longStart = stLongNow && !prevStLongNow;
+                bool shortStart = stShortNow && !prevStShortNow;
+                //Core.Loggers.Log($"Long start : {longStart} prev st long : {prevStLongNow} stlong : {stLongNow}");
+
+                prevStLongNow = stLongNow;
+                prevStShortNow = stShortNow;
+
+
+                bool longAllowed = this.Direction != TradesDirection.Short;
+                bool shortAllowed = this.Direction != TradesDirection.Long;
+
+
+                bool emaGateL = !UseEMA || (close > emaTF_val && close > ema1H_val);
+                bool emaGateS = !UseEMA || (close < emaTF_val && close < ema1H_val);
+                //Core.Loggers.Log("emaGateL: " + emaGateL + " , emaGateS: " + emaGateS + ", close : "  + close + " , ematf_val :"+ emaTF_val + " , ema1h_val :" + ema1H_val + " long start :" + longStart + " short start : " + shortStart);
+                double rTF = GetTFRatio(VolTFLen);
+                //Core.Loggers.Log("rTF: " + rTF + " mad :" + this.mad);
+                //Core.Loggers.Log($"ST: {sTOut.ST} , Dir: {sTOut.Dir} longstart : {longStart} shortstart : {shortStart} rtf : {rTF} emaGatel: {emaGateL} emagates : {emaGateS} close {close}");
+                if (sTOut.Dir < 0)
+                    SetValue(sTOut.ST, 1);
+                else
+                    SetValue(sTOut.ST, 0);
                 HandleFlipOnClosedBar(longStart, shortStart, longAllowed, shortAllowed, rTF);
                 VolumeAndBarConfirmation(rTF);
                 double r4H = this.GetHTFRatio(this.Hd, Vol4HLen);
-                double r1D = this.GetHTFRatio(this.Hdd1,Vol1DLen);
+                double r1D = this.GetHTFRatio(this.Hdd1, Vol1DLen);
+
+                //Core.Loggers.Log("r4H: " + r4H + " , r1D: " + r1D);
 
                 EvaluateFinalGatesAndReset(rTF, r4H, r1D, emaGateL, emaGateS, longAllowed, shortAllowed);
             }
+
+
+            
             //sma for 1h calculation
 
             // Core.Loggers.Log($"mad:  {this.mean.GetValue()} ... sma :{this.sma.GetValue()},   sma[1] {this.mean.GetValue(1)}"  );
-
-
-
 
         }
 
@@ -401,44 +462,49 @@ namespace EliorStrategy
 
 
 
-        private STOut SmaMadSuperTrend(double factor, double close, double prevClose)
+        private STOut SmaMadSuperTrend(double factor, double close, double prevClose, bool isHistorical = false)
+            //
         {
-            double upperBand = this.sma.GetValue() +factor * mad;
-            double lowerBand = this.sma.GetValue() - factor * mad;
-            //Core.Loggers.Log($" upperBand: {upperBand} , lowerBand: {lowerBand} , sma: {this.sma.GetValue()} , mad: {mad} , factor: {factor} ");
-            double prevUpper = this.sma.GetValue(1) + factor * prevMad; ;
-            double prevLower = this.sma.GetValue(1) - factor * prevMad;
-            //Core.Loggers.Log($" prevUpper: {prevUpper} , prevLower: {prevLower} , prevSma: {this.sma.GetValue(1)} , prevMad: {prevMad} , factor: {factor} ");
+            double sma_;
+            if (isHistorical)
+                sma_ = this.sma.GetValue();
+            else
+                sma_ = this.sma.GetValue(1);
 
-            // upperband := upperband < prevupperband or close[1] > prevupperband ? upperband : prevupperband
+            if (double.IsNaN(sma_) || double.IsNaN(mad))
+                return new STOut { ST = double.NaN, Dir = 1 };
+
+            double upperBand = sma_ + factor * mad;
+            double lowerBand = sma_ - factor * mad;
+            //Core.Loggers.Log($"mad : {mad} close {close} histroy : {isHistorical}");
+            double prevUpper = double.IsNaN(prevUpperBand) ? 0.0 : prevUpperBand; 
+            double prevLower = double.IsNaN(prevLowerBand) ? 0.0 : prevLowerBand; 
+
             upperBand = (upperBand < prevUpper || prevClose > prevUpper) ? upperBand : prevUpper;
-
-            // lowerband := lowerband > prevlowerband or close[1] < prevlowerband ? lowerband : prevlowerband
             lowerBand = (lowerBand > prevLower || prevClose < prevLower) ? lowerBand : prevLower;
 
             int dir;
             if (double.IsNaN(prevMad))
-            {
-                // Pine: if na(mad[1]) dir := 1
                 dir = 1;
-            }
-            else if (Math.Abs(prevST - prevUpper) < 1e-12)
-            {
-                // Pine: else if prevst == prevupperband
-                dir = (close > upperBand) ? -1 : 1;
-            }
             else
             {
-                dir = (close < lowerBand) ? 1 : -1;
+                bool prevStEqPrevUpper = !double.IsNaN(prevST) && Math.Abs(prevST - prevUpper) < 1e-10;
+                if (prevStEqPrevUpper)
+                    dir = (close > upperBand) ? -1 : 1;
+                else
+                    dir = (close < lowerBand) ? 1 : -1;
             }
 
             double st = (dir == -1) ? lowerBand : upperBand;
 
+            prevUpperBand = upperBand;
+            prevLowerBand = lowerBand;
             prevST = st;
             prevDir = dir;
 
             return new STOut { ST = st, Dir = dir };
         }
+
 
         private bool BreakAboveLevel(double level, int offsetClosed = 1)
         {
@@ -501,6 +567,7 @@ namespace EliorStrategy
         double rTF
         )
         {
+            //Core.Loggers.Log($"HandleFlipOnClosedBar: longStart={longStart}, shortStart={shortStart}, longAllowed={longAllowed}, shortAllowed={shortAllowed}, rTF={rTF}");
             // Long flip starts a long confirmation sequence and cancels short
             if (longStart && longAllowed)
             {
@@ -515,8 +582,8 @@ namespace EliorStrategy
 
                 // start long sequence
                 pendL = true;
-                sigLvlL = BasisLong(1);      // just-closed bar basis [web:90]
-                sigBarL = barCounter;        // Pine: bar_index
+                sigLvlL = BasisLong(1);      
+                sigBarL = barCounter;       
                 step1L = step2L = false;
                 step1LvlL = double.NaN;
                 step1LBar = -1;
@@ -632,9 +699,23 @@ namespace EliorStrategy
             bool readyL = pendL && step2L && (!UseVOL || (tfGateL && mtfGateL)) && emaGateL && longAllowed;
             bool readyS = pendS && step2S && (!UseVOL || (tfGateS && mtfGateS)) && emaGateS && shortAllowed;
             StoreSignalIfAny(readyL, readyS);
+            //Core.Loggers.Log(
+            //    $"readyL={readyL} " +
+            //    $"pendL={pendL} step2L={step2L} " +
+            //    $"useVOL={UseVOL} tfGateL={tfGateL} mtfGateL={mtfGateL} " +
+            //    $"emaGateL={emaGateL} longAllowed={longAllowed}"
+            //);
+
+            //Core.Loggers.Log(
+            //    $"readyS={readyS} " +
+            //    $"pendS={pendS} step2S={step2S} " +
+            //    $"useVOL={UseVOL} tfGateS={tfGateS} mtfGateS={mtfGateS} " +
+            //    $"emaGateS={emaGateS} shortAllowed={shortAllowed}"
+            //);  // [web:118][web:325]
+
             if (readyL)
             {
-                Core.Loggers.Log("long"); // Pine: log.info("long") [web:325]
+                //Core.Loggers.Log("long"); 
 
                 // reset long state (exact Pine reset)
                 pendL = false;
@@ -649,7 +730,7 @@ namespace EliorStrategy
 
             if (readyS)
             {
-                Core.Loggers.Log("short"); // Pine: log.info("short") [web:325]
+                //Core.Loggers.Log("short"); 
 
                 // reset short state (exact Pine reset)
                 pendS = false;
@@ -667,17 +748,24 @@ namespace EliorStrategy
         private void StoreSignalIfAny(bool readyL, bool readyS)
         {
             // your “confirmed bar” is offset 1 in your codebase
-            var barClosed = (HistoryItemBar)this.HistoricalData[1];
+            double barClose = Close(1);
+            double barHigh = High(1);
+            double barLow = Low(1);
+            DateTime timeleft = Time(1);
+
 
             if (readyL)
-                signals.Add(new SignalEvent { Time = barClosed.TimeLeft, Price = barClosed.Low, Side = SignalSide.Buy });
+                signals.Add(new SignalEvent { Time = timeleft, Price = barLow, Side = SignalSide.Buy });
 
             if (readyS)
-                signals.Add(new SignalEvent { Time = barClosed.TimeLeft, Price = barClosed.High, Side = SignalSide.Sell });
+                signals.Add(new SignalEvent { Time = timeleft, Price = barHigh, Side = SignalSide.Sell });
 
             // optional: prevent unbounded growth
-            if (signals.Count > 2000)
-                signals.RemoveRange(0, signals.Count - 200);
+            const int maxSignals = 20;
+
+            if (signals.Count > maxSignals)
+                signals.RemoveRange(0, signals.Count - maxSignals);
+
         }
         public override void OnPaintChart(PaintChartEventArgs args)
         {
@@ -694,20 +782,21 @@ namespace EliorStrategy
 
             using var buyBrush = new SolidBrush(Color.Lime);
             using var sellBrush = new SolidBrush(Color.Red);
-
+            //Core.Loggers.Log("len sign :" + signals.Count);
             foreach (var s in signals)
             {
-                float x = (float)cc.GetChartX(s.Time);     // [web:335]
-                float y = (float)cc.GetChartY(s.Price);    // [web:335]
 
-                // Skip if off-screen
-                if (x < rect.Left - 200 || x > rect.Right + 200)
+                float x = (float)cc.GetChartX(s.Time);
+                float y = (float)cc.GetChartY(s.Price) - 15;
+
+                    // Skip if off-screen
+                    if (x < rect.Left - 200 || x > rect.Right + 200)
                     continue;
-
+                //Core.Loggers.Log($"Drawing signal: {s.Side} at {s.Time}, price {s.Price}, coords ({x}, {y})");
                 if (s.Side == SignalSide.Buy)
-                    DrawBuySignal(g, buyBrush, (int)x, (int)y, 2, 0);   // below Low via your offset logic
+                    DrawBuySignal(g, buyBrush, (int)x, (int)y, 15, 0);   // below Low via your offset logic
                 else
-                    DrawSellSignal(g, sellBrush, (int)x, (int)y,5,0); // above High via your offset logic
+                    DrawSellSignal(g, sellBrush, (int)x, (int)y,15,0); // above High via your offset logic
             }
         }
         protected void DrawBuySignal(Graphics graphics, Brush brush, int x, int y, int size, int offset)
@@ -716,17 +805,8 @@ namespace EliorStrategy
             var squareSize = size;
             var triangleHeight = size / 2;
 
-            // Draw triangle pointing up above the square
-            var trianglePoints = new[]
-            {
-            new Point(centerX - squareSize / 2, y + offset), // Bottom left
-            new Point(centerX, y + offset - triangleHeight), // Top center
-            new Point(centerX + squareSize / 2, y + offset) // Bottom right
-        };
-            graphics.FillPolygon(brush, trianglePoints);
-
-            // Draw square below the triangle (seamlessly attached)
-            var squareY = y + offset;
+            // Draw square above the triangle
+            var squareY = y - offset - squareSize;
             graphics.FillRectangle(
                 brush,
                 centerX - squareSize / 2,
@@ -735,8 +815,17 @@ namespace EliorStrategy
                 squareSize
             );
 
-            // Draw "Buy" text inside the square
-            using (var textBrush = new SolidBrush(Color.Blue))
+            // Draw triangle pointing down below the square (seamlessly attached)
+            var trianglePoints = new[]
+            {
+            new Point(centerX - squareSize / 2, squareY + squareSize), // Top left
+            new Point(centerX, squareY + squareSize + triangleHeight), // Bottom center
+            new Point(centerX + squareSize / 2, squareY + squareSize) // Top right
+            };
+            graphics.FillPolygon(brush, trianglePoints);
+
+            // Draw "Sell" text inside the square
+            using (var textBrush = new SolidBrush(Color.Black))
             using (var font = new Font("Arial", squareSize / 3, FontStyle.Bold))
             {
                 var text = "Buy";
@@ -773,7 +862,7 @@ namespace EliorStrategy
             graphics.FillPolygon(brush, trianglePoints);
 
             // Draw "Sell" text inside the square
-            using (var textBrush = new SolidBrush(Color.Red))
+            using (var textBrush = new SolidBrush(Color.Black))
             using (var font = new Font("Arial", squareSize / 3, FontStyle.Bold))
             {
                 var text = "Sell";

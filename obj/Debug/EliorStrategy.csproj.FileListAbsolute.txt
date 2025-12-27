@@ -10,3 +10,4 @@ C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.dll
 C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\refint\EliorStrategy.dll
 C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.pdb
 C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\ref\EliorStrategy.dll
+C:\Users\mumar\source\repos\EliorStrategy\obj\Debug\EliorStrategy.sourcelink.json
