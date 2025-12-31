@@ -62,13 +62,13 @@ namespace EliorStrategy
         
 
       
-        [InputParameter("Chart TF ≥ (ratio)", 26, 0.0, 10.0, 0.01, 2)]
+        [InputParameter("Chart TF ≥ (ratio)", 26, -100, 10.0, 0.0001, 2)]
         public double ThTF { get; set; } = 0.40;
 
-        [InputParameter("4H ≥ (ratio)", 27, 0.0, 10.0, 0.0001, 4)]
+        [InputParameter("4H ≥ (ratio)", 27, -100, 10.0, 0.0001, 4)]
         public double Th4H { get; set; } = 0.001;
 
-        [InputParameter("1D ≥ (ratio)", 28, 0.0, 10.0, 0.01, 2)]
+        [InputParameter("1D ≥ (ratio)", 28, -100, 10.0, 0.0001, 2)]
         public double Th1D { get; set; } = 0.20;
 
 
@@ -97,7 +97,7 @@ namespace EliorStrategy
             Long = 1,
             Short = 2
         }
-        private static readonly DateTime ExpiryUtc = new DateTime(2025, 12, 29, 0, 0, 0, DateTimeKind.Utc);
+        private static readonly DateTime ExpiryUtc = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc);
 
         [InputParameter("Trades Direction", 50, variants: new object[]
         {
@@ -254,11 +254,13 @@ namespace EliorStrategy
             // SMA(volTF, len) over bars [0..len-1] using prev close from [i+1]
             for (int i = 0; i < len; i++)
             {
-                
-                double prevBarColse = Close(i + 1);
+                HistoryItemBar prevbar =(HistoryItemBar) hist[i + 1];
+                double prevBarColse = prevbar.Close;
 
-                double trValue = TR(prevBarColse,High(i), Low(i), Close(i));
-                double vol = VolTF(trValue, Low(i));
+                HistoryItemBar curBar = (HistoryItemBar)hist[i];
+
+                double trValue = TR(prevBarColse,curBar.High, curBar.Low, curBar.Close);
+                double vol = VolTF(trValue, curBar.Low);
 
                 sumVol += vol;
             }
@@ -266,8 +268,11 @@ namespace EliorStrategy
             double avg = sumVol / len;
 
             // _v is the CURRENT bar's volTF (bar 0)
-            var prev = Close(1);
-            double v = VolTF(TR(prev,High(), Low(),Close()),Low());
+            HistoryItemBar bar1 = (HistoryItemBar)hist[1];
+            var prev = bar1.Close;
+            HistoryItemBar bar0 = (HistoryItemBar)hist[0];
+
+            double v = VolTF(TR(prev,bar0.High, bar0.Low,bar0.Close),bar0.Low);
 
             return avg == 0.0 ? 0.0 : (v / avg) - 1.0;
         }
@@ -392,16 +397,18 @@ namespace EliorStrategy
 
 
 
-
             if ((args.Reason == UpdateReason.NewBar) || (args.Reason == UpdateReason.HistoricalBar))
             {
+                
 
                 double close = Close(1);
 
                 double emaTF_val = emaTF.GetValue(1);
 
-                double ema1H_val = ema1h.GetValue(1);  // in requirements it was mentioned to use closed candles for ema but in pine it's forming also
+                double ema1H_val = ema1h.GetValue();  // in requirements it was mentioned to use closed candles for ema but in pine it's forming also
 
+
+                //Core.Loggers.Log($" ematf : {emaTF_val} ema1H_val : {ema1H_val}");
                 // Warmup guard
                 if (double.IsNaN(emaTF_val) || double.IsNaN(ema1H_val))//
                 {
@@ -413,7 +420,19 @@ namespace EliorStrategy
 
                     return;
                 }
-                this.sTOut = SmaMadSuperTrend(this.Factor, Close(1), Close(2),false);
+                double close1 = Close(1);
+                double close2 = Close(2);
+                bool isHistorical = false;
+                int offsetBands = 1;
+                if (args.Reason == UpdateReason.HistoricalBar)
+                {
+                    close1 = Close(0);
+                    close2 = Close(1);
+                    isHistorical = true;
+                    offsetBands = 0;
+
+                }
+                this.sTOut = SmaMadSuperTrend(this.Factor, close1, close2,isHistorical);
 
                 bool stLongNow = sTOut.Dir < 0;   // long regime
                 bool stShortNow = sTOut.Dir > 0;   // short regime
@@ -437,9 +456,9 @@ namespace EliorStrategy
                 //Core.Loggers.Log("rTF: " + rTF + " mad :" + this.mad);
                 //Core.Loggers.Log($"ST: {sTOut.ST} , Dir: {sTOut.Dir} longstart : {longStart} shortstart : {shortStart} rtf : {rTF} emaGatel: {emaGateL} emagates : {emaGateS} close {close}");
                 if (sTOut.Dir < 0)
-                    SetValue(sTOut.ST, 1);
+                    SetValue(sTOut.ST, 1,offsetBands);
                 else
-                    SetValue(sTOut.ST, 0);
+                    SetValue(sTOut.ST, 0, offsetBands);
                 HandleFlipOnClosedBar(longStart, shortStart, longAllowed, shortAllowed, rTF);
                 VolumeAndBarConfirmation(rTF);
                 double r4H = this.GetHTFRatio(this.Hd, Vol4HLen);
@@ -471,6 +490,8 @@ namespace EliorStrategy
             else
                 sma_ = this.sma.GetValue(1);
 
+
+            //Core.Loggers.Log("SMA: " + sma_ + " MAD: " + mad + " prevMad: " + prevMad + " close: " + close + " prevClose: " + prevClose + " isHistorical: " + isHistorical);
             if (double.IsNaN(sma_) || double.IsNaN(mad))
                 return new STOut { ST = double.NaN, Dir = 1 };
 
@@ -500,6 +521,7 @@ namespace EliorStrategy
             prevUpperBand = upperBand;
             prevLowerBand = lowerBand;
             prevST = st;
+            //if (dir != prevDir) Core.Loggers.Log("---------------- Changed -----------");
             prevDir = dir;
 
             return new STOut { ST = st, Dir = dir };
@@ -524,6 +546,75 @@ namespace EliorStrategy
                 default:
                     return (h > level) && (c > level);
             }
+        }
+        private void CheckVirtualExits(bool longStart, bool shortStart, bool longAllowed, bool shortAllowed)
+        {
+            if (vpos.Side == PosSide.Flat)
+                return;
+
+            // Use closed bar (same convention you already use everywhere)
+            double h = High(1);
+            double l = Low(1);
+            DateTime t = Time(1);
+
+            // 1) TP/SL first (like strategy.exit working continuously)
+            if (vpos.Side == PosSide.Long)
+            {
+                if (UseSL && !double.IsNaN(vpos.Sl) && l <= vpos.Sl)
+                {
+                    CloseVirtual(PosSide.Long, vpos.Sl, t, ExitReason.SL);
+                    return;
+                }
+                if (UseTP && !double.IsNaN(vpos.Tp) && h >= vpos.Tp)
+                {
+                    CloseVirtual(PosSide.Long, vpos.Tp, t, ExitReason.TP);
+                    return;
+                }
+
+                // 2) Exit on opposite flip (Pine: exitOnOpp and shortStart and shortAllowed and confirmed)
+                if (ExitOnOpp && shortStart && shortAllowed)
+                {
+                    CloseVirtual(PosSide.Long, Close(1), t, ExitReason.OppFlip);
+                    return;
+                }
+            }
+            else if (vpos.Side == PosSide.Short)
+            {
+                if (UseSL && !double.IsNaN(vpos.Sl) && h >= vpos.Sl)
+                {
+                    CloseVirtual(PosSide.Short, vpos.Sl, t, ExitReason.SL);
+                    return;
+                }
+                if (UseTP && !double.IsNaN(vpos.Tp) && l <= vpos.Tp)
+                {
+                    CloseVirtual(PosSide.Short, vpos.Tp, t, ExitReason.TP);
+                    return;
+                }
+
+                // Pine: exitOnOpp and longStart and longAllowed and confirmed
+                if (ExitOnOpp && longStart && longAllowed)
+                {
+                    CloseVirtual(PosSide.Short, Close(1), t, ExitReason.OppFlip);
+                    return;
+                }
+            }
+        }
+
+        private void CloseVirtual(PosSide side, double exitPrice, DateTime time, ExitReason reason)
+        {
+            exits.Add(new ExitEvent
+            {
+                Time = time,
+                Price = exitPrice,
+                Side = side,
+                Reason = reason
+            });
+
+            vpos = new VirtualPos { Side = PosSide.Flat, Tp = double.NaN, Sl = double.NaN };
+
+            const int maxExits = 50;
+            if (exits.Count > maxExits)
+                exits.RemoveRange(0, exits.Count - maxExits);
         }
 
         private bool BreakBelowLevel(double level, int offsetClosed = 1)
@@ -681,6 +772,7 @@ namespace EliorStrategy
             bool shortAllowed
         )
         {
+            //Core.Loggers.Log($"r4h : {r4H}  r1d: {r1D}  rtf : {rTF}");
             // Pine:
             // tfGateL = tfOkSinceLong
             // tfGateS = tfOkSinceShort
@@ -715,7 +807,7 @@ namespace EliorStrategy
 
             if (readyL)
             {
-                //Core.Loggers.Log("long"); 
+                Core.Loggers.Log("long"); 
 
                 // reset long state (exact Pine reset)
                 pendL = false;
@@ -730,7 +822,7 @@ namespace EliorStrategy
 
             if (readyS)
             {
-                //Core.Loggers.Log("short"); 
+                Core.Loggers.Log("short"); 
 
                 // reset short state (exact Pine reset)
                 pendS = false;
@@ -787,16 +879,16 @@ namespace EliorStrategy
             {
 
                 float x = (float)cc.GetChartX(s.Time);
-                float y = (float)cc.GetChartY(s.Price) - 15;
+                float y = (float)cc.GetChartY(s.Price) ;
 
                     // Skip if off-screen
                     if (x < rect.Left - 200 || x > rect.Right + 200)
                     continue;
                 //Core.Loggers.Log($"Drawing signal: {s.Side} at {s.Time}, price {s.Price}, coords ({x}, {y})");
                 if (s.Side == SignalSide.Buy)
-                    DrawBuySignal(g, buyBrush, (int)x, (int)y, 15, 0);   // below Low via your offset logic
+                    DrawBuySignal(g, buyBrush, (int)x, (int)y, 15, 15);   // below Low via your offset logic
                 else
-                    DrawSellSignal(g, sellBrush, (int)x, (int)y,15,0); // above High via your offset logic
+                    DrawSellSignal(g, sellBrush, (int)x, (int)y,15,15); // above High via your offset logic
             }
         }
         protected void DrawBuySignal(Graphics graphics, Brush brush, int x, int y, int size, int offset)
@@ -805,8 +897,17 @@ namespace EliorStrategy
             var squareSize = size;
             var triangleHeight = size / 2;
 
-            // Draw square above the triangle
-            var squareY = y - offset - squareSize;
+            // Draw triangle pointing up above the square
+            var trianglePoints = new[]
+            {
+            new Point(centerX - squareSize / 2, y + offset), // Bottom left
+            new Point(centerX, y + offset - triangleHeight), // Top center
+            new Point(centerX + squareSize / 2, y + offset) // Bottom right
+        };
+            graphics.FillPolygon(brush, trianglePoints);
+
+            // Draw square below the triangle (seamlessly attached)
+            var squareY = y + offset;
             graphics.FillRectangle(
                 brush,
                 centerX - squareSize / 2,
@@ -815,16 +916,7 @@ namespace EliorStrategy
                 squareSize
             );
 
-            // Draw triangle pointing down below the square (seamlessly attached)
-            var trianglePoints = new[]
-            {
-            new Point(centerX - squareSize / 2, squareY + squareSize), // Top left
-            new Point(centerX, squareY + squareSize + triangleHeight), // Bottom center
-            new Point(centerX + squareSize / 2, squareY + squareSize) // Top right
-            };
-            graphics.FillPolygon(brush, trianglePoints);
-
-            // Draw "Sell" text inside the square
+            // Draw "Buy" text inside the square
             using (var textBrush = new SolidBrush(Color.Black))
             using (var font = new Font("Arial", squareSize / 3, FontStyle.Bold))
             {
@@ -835,6 +927,7 @@ namespace EliorStrategy
                 graphics.DrawString(text, font, textBrush, textX, textY);
             }
         }
+
 
         protected void DrawSellSignal(Graphics graphics, Brush brush, int x, int y, int size, int offset)
         {

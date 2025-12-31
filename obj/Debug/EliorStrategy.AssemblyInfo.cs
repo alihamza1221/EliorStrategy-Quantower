@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("EliorStrategy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7a4348b7b93bb7415f8c58038995a20654d20c77")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+59b43225733dd74810d40ffbac553a17825575ec")]
 [assembly: System.Reflection.AssemblyProductAttribute("EliorStrategy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("EliorStrategy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
