@@ -107,6 +107,21 @@ namespace EliorStrategy
         })]
         public TradesDirection Direction { get; set; } = TradesDirection.Both;
 
+        // ---------------- Risk / Exits ----------------
+        [InputParameter("Use Take Profit %", 60)]
+        public bool UseTP { get; set; } = true;
+
+        [InputParameter("TP %", 61, 0.1, 100.0, 0.1, 2)]
+        public double TpPct { get; set; } = 1.5;
+
+        [InputParameter("Use Stop Loss %", 62)]
+        public bool UseSL { get; set; } = true;
+
+        [InputParameter("SL %", 63, 0.1, 100.0, 0.1, 2)]
+        public double SlPct { get; set; } = 0.8;
+
+        [InputParameter("Exit on opposite SuperTrend flip", 64)]
+        public bool ExitOnOpp { get; set; } = true;
 
         public HistoricalData Hd;
         public HistoricalData Hdd1;
@@ -177,6 +192,32 @@ namespace EliorStrategy
         private double prevLowerBand = double.NaN;
 
         private double barsSinceStart = 0;
+
+        private enum PosSide { Flat, Long, Short }
+
+        private struct VirtualPos
+        {
+            public PosSide Side;
+            public double EntryPrice;
+            public DateTime EntryTime;
+            public double Tp;   // NaN if disabled
+            public double Sl;   // NaN if disabled
+        }
+
+        private VirtualPos vpos;
+
+        private enum ExitReason { TP, SL, OppFlip }
+
+        private struct ExitEvent
+        {
+            public DateTime Time;
+            public double Price;
+            public PosSide Side;      // which position was closed
+            public ExitReason Reason;
+        }
+
+        private readonly List<ExitEvent> exits = new List<ExitEvent>();
+
         public EliorStrategy()
             : base()
         {
@@ -207,6 +248,8 @@ namespace EliorStrategy
 
             Core.Loggers.Log($"started at : {DateTime.UtcNow} ");
             // Add your initialization code here
+            vpos = new VirtualPos { Side = PosSide.Flat, Tp = double.NaN, Sl = double.NaN };
+            exits.Clear();
 
             this.isMadCalReq = true;
             //history 4h
@@ -422,12 +465,14 @@ namespace EliorStrategy
                 }
                 double close1 = Close(1);
                 double close2 = Close(2);
+                DateTime timenow = Time(1);
                 bool isHistorical = false;
                 int offsetBands = 1;
                 if (args.Reason == UpdateReason.HistoricalBar)
                 {
                     close1 = Close(0);
                     close2 = Close(1);
+                    timenow = Time(0);
                     isHistorical = true;
                     offsetBands = 0;
 
@@ -448,6 +493,7 @@ namespace EliorStrategy
                 bool longAllowed = this.Direction != TradesDirection.Short;
                 bool shortAllowed = this.Direction != TradesDirection.Long;
 
+                CheckVirtualExits(longStart, shortStart, longAllowed, shortAllowed, close1, close2, timenow);
 
                 bool emaGateL = !UseEMA || (close > emaTF_val && close > ema1H_val);
                 bool emaGateS = !UseEMA || (close < emaTF_val && close < ema1H_val);
@@ -547,15 +593,11 @@ namespace EliorStrategy
                     return (h > level) && (c > level);
             }
         }
-        private void CheckVirtualExits(bool longStart, bool shortStart, bool longAllowed, bool shortAllowed)
+        private void CheckVirtualExits(bool longStart, bool shortStart, bool longAllowed, bool shortAllowed, double h, double l, DateTime t)
         {
             if (vpos.Side == PosSide.Flat)
                 return;
 
-            // Use closed bar (same convention you already use everywhere)
-            double h = High(1);
-            double l = Low(1);
-            DateTime t = Time(1);
 
             // 1) TP/SL first (like strategy.exit working continuously)
             if (vpos.Side == PosSide.Long)
@@ -807,6 +849,8 @@ namespace EliorStrategy
 
             if (readyL)
             {
+
+                OpenVirtual(PosSide.Long, Close(1), Time(1));
                 Core.Loggers.Log("long"); 
 
                 // reset long state (exact Pine reset)
@@ -822,6 +866,7 @@ namespace EliorStrategy
 
             if (readyS)
             {
+                OpenVirtual(PosSide.Short, Close(1), Time(1));
                 Core.Loggers.Log("short"); 
 
                 // reset short state (exact Pine reset)
@@ -836,6 +881,29 @@ namespace EliorStrategy
             }
         }
 
+        private void OpenVirtual(PosSide side, double entryPrice, DateTime time)
+        {
+            vpos.Side = side;
+            vpos.EntryPrice = entryPrice;
+            vpos.EntryTime = time;
+
+            vpos.Tp = double.NaN;
+            vpos.Sl = double.NaN;
+
+            if (UseTP)
+            {
+                vpos.Tp = side == PosSide.Long
+                    ? entryPrice * (1.0 + TpPct / 100.0)
+                    : entryPrice * (1.0 - TpPct / 100.0);
+            }
+
+            if (UseSL)
+            {
+                vpos.Sl = side == PosSide.Long
+                    ? entryPrice * (1.0 - SlPct / 100.0)
+                    : entryPrice * (1.0 + SlPct / 100.0);
+            }
+        }
 
         private void StoreSignalIfAny(bool readyL, bool readyS)
         {
@@ -874,6 +942,23 @@ namespace EliorStrategy
 
             using var buyBrush = new SolidBrush(Color.Lime);
             using var sellBrush = new SolidBrush(Color.Red);
+            using var exitBrush = new SolidBrush(Color.Gold);
+
+            foreach (var e in exits)
+            {
+                float x = (float)cc.GetChartX(e.Time);
+                float y = (float)cc.GetChartY(e.Price);
+
+                if (x < rect.Left - 200 || x > rect.Right + 200)
+                    continue;
+
+                // reuse your shapes but different label/color if you want
+                if (e.Side == PosSide.Long)
+                    DrawSellSignal(g, exitBrush, (int)x, (int)y, 12, 12, "x"); // “close long” marker
+                else
+                    DrawBuySignal(g, exitBrush, (int)x, (int)y, 12, 12, "x");  // “close short” marker
+            }
+
             //Core.Loggers.Log("len sign :" + signals.Count);
             foreach (var s in signals)
             {
@@ -891,7 +976,7 @@ namespace EliorStrategy
                     DrawSellSignal(g, sellBrush, (int)x, (int)y,15,15); // above High via your offset logic
             }
         }
-        protected void DrawBuySignal(Graphics graphics, Brush brush, int x, int y, int size, int offset)
+        protected void DrawBuySignal(Graphics graphics, Brush brush, int x, int y, int size, int offset, string text = "buy")
         {
             var centerX = x + this.CurrentChart.BarsWidth / 2;
             var squareSize = size;
@@ -920,7 +1005,6 @@ namespace EliorStrategy
             using (var textBrush = new SolidBrush(Color.Black))
             using (var font = new Font("Arial", squareSize / 3, FontStyle.Bold))
             {
-                var text = "Buy";
                 var textSize = graphics.MeasureString(text, font);
                 var textX = centerX - (int)(textSize.Width / 2);
                 var textY = squareY + (int)((squareSize - textSize.Height) / 2);
@@ -929,7 +1013,7 @@ namespace EliorStrategy
         }
 
 
-        protected void DrawSellSignal(Graphics graphics, Brush brush, int x, int y, int size, int offset)
+        protected void DrawSellSignal(Graphics graphics, Brush brush, int x, int y, int size, int offset, string text = "sell")
         {
             var centerX = x + this.CurrentChart.BarsWidth / 2;
             var squareSize = size;
@@ -958,7 +1042,7 @@ namespace EliorStrategy
             using (var textBrush = new SolidBrush(Color.Black))
             using (var font = new Font("Arial", squareSize / 3, FontStyle.Bold))
             {
-                var text = "Sell";
+                
                 var textSize = graphics.MeasureString(text, font);
                 var textX = centerX - (int)(textSize.Width / 2);
                 var textY = squareY + (int)((squareSize - textSize.Height) / 2);
