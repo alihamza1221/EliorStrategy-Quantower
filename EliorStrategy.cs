@@ -3,8 +3,13 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
+using System.Net.Http;
 using System.Reflection;
+using System.Text;
+using System.Threading.Tasks;
 using TradingPlatform.BusinessLayer;
+using static System.Net.WebRequestMethods;
 
 namespace EliorStrategy
 {
@@ -13,10 +18,16 @@ namespace EliorStrategy
     /// Information about API you can find here: http://api.quantower.com
     /// Code samples: https://github.com/Quantower/Examples
     /// </summary>
-	public class EliorStrategy : Indicator
+	public class EliorStrategy : Indicator, IWatchlistIndicator
     {
-    // ---------------- SuperTrend ----------------
-    [InputParameter("Source", 0, variants: new object[]
+        [InputParameter("Telegram Bot Token", 220)]
+        public string TelegramBotToken { get; set; } = "8559605276:AAG-2SKx-Qg3o7zHMg97n1DgNO8QmMLn1i8";
+
+        [InputParameter("Telegram Chat Id", 221)]
+        public string TelegramChatId { get; set; } = "338776415";
+
+        // ---------------- SuperTrend ----------------
+        [InputParameter("Source", 0, variants: new object[]
     {
         "Close", PriceType.Close,
         "Open",  PriceType.Open,
@@ -26,24 +37,24 @@ namespace EliorStrategy
     public PriceType Src { get; set; } = PriceType.Close;
 
     [InputParameter("SMA Length", 1, 1, 500, 1)]
-    public int SmaLen { get; set; } = 25;
+    public int SmaLen { get; set; } = 104;
 
     [InputParameter("Factor", 2, 0.05, 20.0, 0.05, 2)]
-    public double Factor { get; set; } = 1.8;
+    public double Factor { get; set; } = 1.0;
 
     [InputParameter("MAD Length", 3, 1, 500, 1)]
-    public int MadLen { get; set; } = 20;
-
+    public int MadLen { get; set; } = 120;
+        
 
         // ---------------- EMA Filters ----------------
         [InputParameter("Use EMA Filters", 10)]
         public bool UseEMA { get; set; } = true;
 
         [InputParameter("EMA Length (Chart TF)", 11, 1, 2000, 1)]
-        public int EmaTFLen { get; set; } = 200;
+        public int EmaTFLen { get; set; } = 61;
 
         [InputParameter("EMA Length (1H)", 12, 1, 2000, 1)]
-        public int Ema1hLen { get; set; } = 50;
+        public int Ema1hLen { get; set; } = 21;
 
 
         // ---------------- Volatility Filters ----------------
@@ -63,13 +74,13 @@ namespace EliorStrategy
 
       
         [InputParameter("Chart TF ≥ (ratio)", 26, -100, 10.0, 0.0001, 2)]
-        public double ThTF { get; set; } = 0.40;
+        public double ThTF { get; set; } = 0.80;
 
         [InputParameter("4H ≥ (ratio)", 27, -100, 10.0, 0.0001, 4)]
-        public double Th4H { get; set; } = 0.001;
+        public double Th4H { get; set; } = 1.6216;
 
         [InputParameter("1D ≥ (ratio)", 28, -100, 10.0, 0.0001, 2)]
-        public double Th1D { get; set; } = 0.20;
+        public double Th1D { get; set; } = 1.50;
 
 
         public enum ConfirmMode
@@ -98,6 +109,7 @@ namespace EliorStrategy
             Short = 2
         }
         private static readonly DateTime ExpiryUtc = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+        private DateTime startingTime;
 
         [InputParameter("Trades Direction", 50, variants: new object[]
         {
@@ -112,16 +124,41 @@ namespace EliorStrategy
         public bool UseTP { get; set; } = true;
 
         [InputParameter("TP %", 61, 0.1, 100.0, 0.1, 2)]
-        public double TpPct { get; set; } = 1.5;
+        public double TpPct { get; set; } = 40;
 
         [InputParameter("Use Stop Loss %", 62)]
         public bool UseSL { get; set; } = true;
 
         [InputParameter("SL %", 63, 0.1, 100.0, 0.1, 2)]
-        public double SlPct { get; set; } = 0.8;
+        public double SlPct { get; set; } = 4.80;
 
         [InputParameter("Exit on opposite SuperTrend flip", 64)]
         public bool ExitOnOpp { get; set; } = true;
+
+
+        [InputParameter("3Commas exchange (tv_exchange)", 210)]
+        public string TvExchange { get; set; } = "BINANCE";
+
+        [InputParameter("3Commas Futures Perp (.P)", 211)]
+        public bool IsFuturesPerp { get; set; } = true;
+
+        private static readonly HttpClient http = new HttpClient();
+        private const string CommasWebhookUrl = "https://api.3commas.io/signal_bots/webhooks";
+        private readonly HashSet<string> sentAlerts = new HashSet<string>();
+
+
+        private string lastCommasKey = "";
+
+        ///eyJhbGciOiJIUzI1NiJ9.eyJzaWduYWxzX3NvdXJjZV9pZCI6MTYwMDM0fQ.MP3MX8E1T51f24xRwj8TwRfK2yryzCC6JoVx1Q3BpiE
+        [InputParameter("3Commas Secret", 201)]
+        public string CommasSecret { get; set; } = "testeyJhbGciOiJIUzI1NiJ9.eyJzaWduYWxzX3NvdXJjZV9pZCI6MTYwMDM0fQ.MP3MX8E1T51f24xRwj8TwRfK2yryzCC6JoVx1Q3BpiE";
+
+        //70d1c6f8-95f4-440b-abd4-9a441b28e945
+        [InputParameter("Bot UUID", 202)]
+        public string BotUuid { get; set; } = "test70d1c6f8-95f4-440b-abd4-9a441b28e945";
+
+
+        public int MinHistoryDepths => 3000;
 
         public HistoricalData Hd;
         public HistoricalData Hdd1;
@@ -144,7 +181,6 @@ namespace EliorStrategy
         {
             public double ST;
             public int Dir;   // -1 = long regime, +1 = short regime (same as Pine)
-
         }
 
         private bool prevStLongNow = false;
@@ -218,17 +254,18 @@ namespace EliorStrategy
 
         private readonly List<ExitEvent> exits = new List<ExitEvent>();
 
+
+        bool onStartStValueUp = false;
+        bool isDirectionChangedInLive = false;
         public EliorStrategy()
             : base()
         {
             // Defines indicator's name and description.
-            Name = "EliorStrategy";
-            Description = "My indicator's annotation";
+            Name = "EliorScanner 2.0";
+            Description = "ST Bands scanner";
             AddLineSeries("st up", Color.Violet, 1, LineStyle.Solid);
             AddLineSeries("st down", Color.Green, 1, LineStyle.Solid);
             AddLineSeries("EMA TF", Color.Orange, 1, LineStyle.Solid);
-
-
 
 
             // By default indicator will be applied on main window of the chart
@@ -244,18 +281,20 @@ namespace EliorStrategy
         /// </summary>
         protected override void OnInit()
         {
-
-
-            Core.Loggers.Log($"started at : {DateTime.UtcNow} ");
+            Core.Loggers.Log($"started at : {DateTime.UtcNow} symbol: {this.Symbol}");
+            startingTime = DateTime.UtcNow;
             // Add your initialization code here
             vpos = new VirtualPos { Side = PosSide.Flat, Tp = double.NaN, Sl = double.NaN };
             exits.Clear();
 
             this.isMadCalReq = true;
-            //history 4h
+            //history 4h -- in settings it's set to 1h
+            //this.Hd = null;
+            //DateTime from = DateTime.UtcNow.AddHours(-(Vol4HLen + 1) * 4);
+            //this.Hd = this.Symbol.GetHistory(Period.HOUR4, this.Symbol.HistoryType, from);
             this.Hd = null;
-            DateTime from = DateTime.UtcNow.AddHours(-(Vol4HLen + 1) * 4);
-            this.Hd = this.Symbol.GetHistory(Period.HOUR4, this.Symbol.HistoryType, from);
+            DateTime from = DateTime.UtcNow.AddHours(-(Vol4HLen + 1));
+            this.Hd = this.Symbol.GetHistory(Period.HOUR1, this.Symbol.HistoryType, from);
 
 
             //history 1d
@@ -284,8 +323,101 @@ namespace EliorStrategy
             AddIndicator(this.emaTF);
 
         }
+        private void SendTelegramAlert(string message, string alertId)
+        {
+            if (string.IsNullOrWhiteSpace(TelegramBotToken) || string.IsNullOrWhiteSpace(TelegramChatId))
+                return;
 
-         
+            if (!sentAlerts.Add(alertId)) // already sent
+                return;
+
+            _ = SendTelegramAsync(message);
+        }
+
+        private async Task SendTelegramAsync(string message)
+        {
+            try
+            {
+                string url = $"https://api.telegram.org/bot{TelegramBotToken}/sendMessage";
+                var content = new System.Net.Http.FormUrlEncodedContent(new[]
+                {
+            new KeyValuePair<string, string>("chat_id", TelegramChatId),
+            new KeyValuePair<string, string>("text", message)
+        });
+
+                using var resp = await http.PostAsync(url, content);
+                // optional: log failure
+                if (!resp.IsSuccessStatusCode)
+                    Core.Loggers.Log($"TG failed: {(int)resp.StatusCode} {resp.ReasonPhrase}");
+            }
+            catch (Exception ex)
+            {
+                Core.Loggers.Log($"TG error: {ex.Message}");
+            }
+        }
+
+        private void Send3CommasEnterLong(double price, DateTime time, string tvExchange, string tvInstrument)
+         => Send3Commas("enter_long", price, time, tvExchange, tvInstrument);
+
+        private void Send3CommasExitLong(double price, DateTime time, string tvExchange, string tvInstrument)
+            => Send3Commas("exit_long", price, time, tvExchange, tvInstrument);
+
+        private void Send3CommasEnterShort(double price, DateTime time, string tvExchange, string tvInstrument)
+            => Send3Commas("enter_short", price, time, tvExchange, tvInstrument);
+
+        private void Send3CommasExitShort(double price, DateTime time, string tvExchange, string tvInstrument)
+            => Send3Commas("exit_short", price, time, tvExchange, tvInstrument);
+        private void Send3Commas(string action, double triggerPrice, DateTime signalTimeCandle, string tvExchange, string tvInstrument)
+        {
+
+            DateTime signalTime = DateTime.UtcNow;
+            string secret = CommasSecret;
+            string botUuid = BotUuid;
+            int maxLagSec = 300;
+
+            // Dedup per symbol+action+bar time (prevents multiple sends on recalcs)
+            string key = $"{tvExchange}|{tvInstrument}|{action}|{signalTimeCandle:O}";
+            if (key == lastCommasKey) return;
+
+            SendTelegramAlert(key, key);
+            lastCommasKey = key;
+
+            string ts = signalTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+            
+            string json =
+                "{"
+                + $"\"secret\":\"{secret}\","
+                + $"\"max_lag\":\"{maxLagSec}\","
+                + $"\"timestamp\":\"{ts}\","
+                + $"\"trigger_price\":\"{triggerPrice.ToString(CultureInfo.InvariantCulture)}\","
+                + $"\"tv_exchange\":\"{tvExchange}\","
+                + $"\"tv_instrument\":\"{tvInstrument}\","
+                + $"\"action\":\"{action}\","
+                + $"\"bot_uuid\":\"{botUuid}\""
+                + "}";
+
+            Core.Loggers.Log($"3Commas JSON: {json}");
+
+            _ = PostJsonAsync(json);
+        }
+
+        private async Task PostJsonAsync(string json)
+        {
+            try
+            {
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var resp = await http.PostAsync(CommasWebhookUrl, content);
+                string body = await resp.Content.ReadAsStringAsync();
+
+                // Keep logs small; Event Log will show this
+                Core.Loggers.Log($"3Commas: {(int)resp.StatusCode} {resp.ReasonPhrase} {body}");
+            }
+            catch (Exception ex)
+            {
+                Core.Loggers.Log($"3Commas error: {ex.Message}");
+            }
+        }
+
         protected double GetHTFRatio(HistoricalData hist, int len)
         {
             // Need len bars + 1 previous-close bar
@@ -364,28 +496,32 @@ namespace EliorStrategy
             return tr;
         }
 
-        /// <summary>
-        /// Calculation entry point. This function is called when a price data updates. 
-        /// Will be runing under the HistoricalBar mode during history loading. 
-        /// Under NewTick during realtime. 
-        /// Under NewBar if start of the new bar is required.
-        /// </summary>
-        /// <param name="args">Provides data of updating reason and incoming price.</param>
+        private string Get3CommasExchange() => (TvExchange ?? "").Trim().ToUpperInvariant();
+
+        private string Get3CommasInstrument()
+        {
+            // Quantower: "BTC/USDT" -> 3Commas: "BTCUSDT" (spot) or "BTCUSDT.P" (perp) [web:525]
+            string s = (this.Symbol?.Name ?? "").Trim();
+            s = s.Replace("/", "").Replace("-", "").Replace(" ", "");
+
+            if (IsFuturesPerp && !s.EndsWith(".P", StringComparison.OrdinalIgnoreCase))
+                s += ".P";
+
+            return s;
+        }
+
+
         protected override void OnUpdate(UpdateArgs args)
         {
-            if (DateTime.UtcNow >= ExpiryUtc)
-            {
-                // optional: log once (avoid spamming)
-                Core.Loggers.Log("EliorStrategy license expired (2025-12-29)."); 
-                return;
-            }
-
+          
+         
 
             SetValue(this.emaTF.GetValue(),2);
+            if(args.Reason == UpdateReason.NewBar || args.Reason == UpdateReason.HistoricalBar)
+                barCounter += 1;
 
 
-
-                if (args.Reason == UpdateReason.NewBar )
+            if (args.Reason == UpdateReason.NewBar )
             {
                // Core.Loggers.Log("New bar...");
                 if (this.HistoricalData.Count < this.MadLen + 1)
@@ -405,7 +541,6 @@ namespace EliorStrategy
 
                 //Core.Loggers.Log($"Final MAD: {this.mad}");
                 this.isMadCalReq = false;
-                barCounter++;
             }
 
             if (args.Reason == UpdateReason.HistoricalBar)
@@ -430,7 +565,6 @@ namespace EliorStrategy
 
                 //Core.Loggers.Log($"Final MAD: {this.mad}");
                 this.isMadCalReq = false;
-                barCounter++;
             }
 
 
@@ -442,7 +576,8 @@ namespace EliorStrategy
 
             if ((args.Reason == UpdateReason.NewBar) || (args.Reason == UpdateReason.HistoricalBar))
             {
-                
+
+
 
                 double close = Close(1);
 
@@ -463,10 +598,12 @@ namespace EliorStrategy
 
                     return;
                 }
+                bool isCalculatingOnHistory = false;
                 double close1 = Close(1);
                 double close2 = Close(2);
                 DateTime timenow = Time(1);
                 bool isHistorical = false;
+                int barincrement = 0;
                 int offsetBands = 1;
                 if (args.Reason == UpdateReason.HistoricalBar)
                 {
@@ -475,7 +612,8 @@ namespace EliorStrategy
                     timenow = Time(0);
                     isHistorical = true;
                     offsetBands = 0;
-
+                    barincrement = 1;
+                    isCalculatingOnHistory = true;
                 }
                 this.sTOut = SmaMadSuperTrend(this.Factor, close1, close2,isHistorical);
 
@@ -499,20 +637,39 @@ namespace EliorStrategy
                 bool emaGateS = !UseEMA || (close < emaTF_val && close < ema1H_val);
                 //Core.Loggers.Log("emaGateL: " + emaGateL + " , emaGateS: " + emaGateS + ", close : "  + close + " , ematf_val :"+ emaTF_val + " , ema1h_val :" + ema1H_val + " long start :" + longStart + " short start : " + shortStart);
                 double rTF = GetTFRatio(VolTFLen);
-                //Core.Loggers.Log("rTF: " + rTF + " mad :" + this.mad);
+                Core.Loggers.Log("rTF: " + rTF + " mad :" + this.mad);
                 //Core.Loggers.Log($"ST: {sTOut.ST} , Dir: {sTOut.Dir} longstart : {longStart} shortstart : {shortStart} rtf : {rTF} emaGatel: {emaGateL} emagates : {emaGateS} close {close}");
                 if (sTOut.Dir < 0)
-                    SetValue(sTOut.ST, 1,offsetBands);
+                    SetValue(sTOut.ST, 1,0);
                 else
-                    SetValue(sTOut.ST, 0, offsetBands);
-                HandleFlipOnClosedBar(longStart, shortStart, longAllowed, shortAllowed, rTF);
+                    SetValue(sTOut.ST, 0, 0);
+
+                if (sTOut.Dir < 0)
+                    SetValue(0, 0, 0);
+                else
+                    SetValue(0, 1, 0);
+
+                if (args.Reason == UpdateReason.HistoricalBar)
+                {
+                    onStartStValueUp = sTOut.Dir > 0;
+
+                }
+                else if(args.Reason == UpdateReason.NewBar && !isDirectionChangedInLive)
+                {
+                    if(onStartStValueUp != (sTOut.Dir > 0))
+                    {
+                        isDirectionChangedInLive = true;
+                    }
+                }
+                //Core.Loggers.Log($"st : {sTOut.ST}");
+                HandleFlipOnClosedBar(longStart, shortStart, longAllowed, shortAllowed, rTF, barincrement);
                 VolumeAndBarConfirmation(rTF);
                 double r4H = this.GetHTFRatio(this.Hd, Vol4HLen);
                 double r1D = this.GetHTFRatio(this.Hdd1, Vol1DLen);
 
                 //Core.Loggers.Log("r4H: " + r4H + " , r1D: " + r1D);
 
-                EvaluateFinalGatesAndReset(rTF, r4H, r1D, emaGateL, emaGateS, longAllowed, shortAllowed);
+                EvaluateFinalGatesAndReset(rTF, r4H, r1D, emaGateL, emaGateS, longAllowed, shortAllowed, isCalculatingOnHistory);
             }
 
 
@@ -652,9 +809,19 @@ namespace EliorStrategy
                 Reason = reason
             });
 
+            if(side == PosSide.Long)
+            {
+                Send3CommasExitLong(exitPrice, time, Get3CommasExchange(), Get3CommasInstrument());
+                Core.Loggers.Log($"Sent 3Commas exit long at price {exitPrice} time {time}");
+            }
+            else if(side == PosSide.Short)
+            {
+                Send3CommasExitShort(exitPrice, time, Get3CommasExchange(), Get3CommasInstrument());
+                Core.Loggers.Log($"Sent 3Commas exit short at price {exitPrice} time {time}");
+            }
             vpos = new VirtualPos { Side = PosSide.Flat, Tp = double.NaN, Sl = double.NaN };
 
-            const int maxExits = 50;
+            const int maxExits = 20;
             if (exits.Count > maxExits)
                 exits.RemoveRange(0, exits.Count - maxExits);
         }
@@ -697,7 +864,7 @@ namespace EliorStrategy
         private void HandleFlipOnClosedBar(
         bool longStart, bool shortStart,
         bool longAllowed, bool shortAllowed,
-        double rTF
+        double rTF, int barincrement
         )
         {
             //Core.Loggers.Log($"HandleFlipOnClosedBar: longStart={longStart}, shortStart={shortStart}, longAllowed={longAllowed}, shortAllowed={shortAllowed}, rTF={rTF}");
@@ -708,7 +875,8 @@ namespace EliorStrategy
                 pendS = false;
                 sigLvlS = double.NaN;
                 sigBarS = -1;
-                step1S = step2S = false;
+                step1S  = false;
+                step2S = false;
                 step1LvlS = double.NaN;
                 step1SBar = -1;
                 tfOkSinceShort = false;
@@ -716,8 +884,9 @@ namespace EliorStrategy
                 // start long sequence
                 pendL = true;
                 sigLvlL = BasisLong(1);      
-                sigBarL = barCounter;       
-                step1L = step2L = false;
+                sigBarL = barCounter + barincrement;       
+                step1L = false;
+                step2L = false;
                 step1LvlL = double.NaN;
                 step1LBar = -1;
                 tfOkSinceLong = (rTF >= ThTF);
@@ -730,7 +899,8 @@ namespace EliorStrategy
                 pendL = false;
                 sigLvlL = double.NaN;
                 sigBarL = -1;
-                step1L = step2L = false;
+                step1L = false;
+                step2L = false;
                 step1LvlL = double.NaN;
                 step1LBar = -1;
                 tfOkSinceLong = false;
@@ -738,8 +908,9 @@ namespace EliorStrategy
                 // start short sequence
                 pendS = true;
                 sigLvlS = BasisShort(1);     // just-closed bar basis [web:90]
-                sigBarS = barCounter;        // Pine: bar_index
-                step1S = step2S = false;
+                sigBarS = barCounter + barincrement;        // Pine: bar_index
+                step1S = false;
+                step2S = false;
                 step1LvlS = double.NaN;
                 step1SBar = -1;
                 tfOkSinceShort = (rTF >= ThTF);
@@ -799,6 +970,7 @@ namespace EliorStrategy
                 else if (step1S && !step2S && step1SBar >= 0 && isNextAfterStep1S && BreakBelowLevel(step1LvlS, offsetClosed: 1))
                 {
                     step2S = true;
+                    //Core.Loggers.Log(" bar counter : " + barCounter + " step1SBar : " + step1SBar + " sigBars :" + sigBarS + " time : " + Time(1) );
                 }
             }
         }
@@ -811,7 +983,8 @@ namespace EliorStrategy
             bool emaGateL,
             bool emaGateS,
             bool longAllowed,
-            bool shortAllowed
+            bool shortAllowed,
+            bool isCalculatingOnHistory
         )
         {
             //Core.Loggers.Log($"r4h : {r4H}  r1d: {r1D}  rtf : {rTF}");
@@ -833,25 +1006,51 @@ namespace EliorStrategy
             bool readyL = pendL && step2L && (!UseVOL || (tfGateL && mtfGateL)) && emaGateL && longAllowed;
             bool readyS = pendS && step2S && (!UseVOL || (tfGateS && mtfGateS)) && emaGateS && shortAllowed;
             StoreSignalIfAny(readyL, readyS);
-            //Core.Loggers.Log(
-            //    $"readyL={readyL} " +
-            //    $"pendL={pendL} step2L={step2L} " +
-            //    $"useVOL={UseVOL} tfGateL={tfGateL} mtfGateL={mtfGateL} " +
-            //    $"emaGateL={emaGateL} longAllowed={longAllowed}"
-            //);
+          
 
-            //Core.Loggers.Log(
-            //    $"readyS={readyS} " +
-            //    $"pendS={pendS} step2S={step2S} " +
-            //    $"useVOL={UseVOL} tfGateS={tfGateS} mtfGateS={mtfGateS} " +
-            //    $"emaGateS={emaGateS} shortAllowed={shortAllowed}"
-            //);  // [web:118][web:325]
+
+            var prevBar = (HistoryItemBar)this.HistoricalData[1];   // previous closed bar
+            DateTime prevCloseTimeUtc = prevBar.TimeRight;          // bar end time [web:85]
+            Core.Loggers.Log(
+                     
+                       $"rtf : {rTF} r4h: {r4H}  and r1d : {r1D}"
+                   );
+
+            
+            bool isLive = false;
+            if (prevCloseTimeUtc > startingTime)
+            {
+                isLive = true;
+            }
 
             if (readyL)
             {
 
-                OpenVirtual(PosSide.Long, Close(1), Time(1));
-                Core.Loggers.Log("long"); 
+                if (!isCalculatingOnHistory && isLive && isDirectionChangedInLive)
+                {
+                    Core.Loggers.Log(
+                        $"readyL={readyL} " +
+                        $"pendL={pendL} step2L={step2L} " +
+                        $"useVOL={UseVOL} tfGateL={tfGateL} mtfGateL={mtfGateL} " +
+                        $"emaGateL={emaGateL} longAllowed={longAllowed}" +
+                        $"rtf : {rTF} r4h: {r4H}  and r1d : {r1D}"
+                    );
+
+                    Core.Loggers.Log(
+                        $"readyS={readyS} " +
+                        $"pendS={pendS} step2S={step2S} " +
+                        $"useVOL={UseVOL} tfGateS={tfGateS} mtfGateS={mtfGateS} " +
+                        $"emaGateS={emaGateS} shortAllowed={shortAllowed}" +
+                        $"rtf : {rTF} r4h: {r4H}  and r1d : {r1D}"
+                    );  
+                    string ex = Get3CommasExchange();
+                    string inst = Get3CommasInstrument();
+
+                    OpenVirtual(PosSide.Long, Close(1), Time(1));
+                    Send3CommasEnterLong(Close(1), Time(1), ex, inst);
+                    Core.Loggers.Log($"long sent to 3commas close -{Close(1)} time- {Time(1)} - exchange : {ex} instrument : {inst}");
+                }
+                //Core.Loggers.Log("long"); 
 
                 // reset long state (exact Pine reset)
                 pendL = false;
@@ -864,10 +1063,36 @@ namespace EliorStrategy
                 tfOkSinceLong = false;
             }
 
-            if (readyS)
-            {
-                OpenVirtual(PosSide.Short, Close(1), Time(1));
-                Core.Loggers.Log("short"); 
+                if (readyS)
+                {
+                    if (!isCalculatingOnHistory && isLive && isDirectionChangedInLive)
+                    {
+
+                    Core.Loggers.Log(
+                        $"readyL={readyL} " +
+                        $"pendL={pendL} step2L={step2L} " +
+                        $"useVOL={UseVOL} tfGateL={tfGateL} mtfGateL={mtfGateL} " +
+                        $"emaGateL={emaGateL} longAllowed={longAllowed}" +
+                        $"rtf : {rTF} r4h: {r4H}  and r1d : {r1D}"
+                    );
+
+                    Core.Loggers.Log(
+                        $"readyS={readyS} " +
+                        $"pendS={pendS} step2S={step2S} " +
+                        $"useVOL={UseVOL} tfGateS={tfGateS} mtfGateS={mtfGateS} " +
+                        $"emaGateS={emaGateS} shortAllowed={shortAllowed}" +
+                        $"rtf : {rTF} r4h: {r4H}  and r1d : {r1D}"
+                    );  // [web:118][web:325]
+
+                    string ex = Get3CommasExchange();
+                    string inst = Get3CommasInstrument();
+
+                    OpenVirtual(PosSide.Short, Close(1), Time(1));
+                    Send3CommasEnterShort(Close(1), Time(1), ex, inst);
+                    Core.Loggers.Log($"short sent to 3commas close -{Close(1)} time- {Time(1)} - exchange : {ex} instrument : {inst}");
+
+                }
+                //Core.Loggers.Log("short"); 
 
                 // reset short state (exact Pine reset)
                 pendS = false;
@@ -912,7 +1137,7 @@ namespace EliorStrategy
             double barHigh = High(1);
             double barLow = Low(1);
             DateTime timeleft = Time(1);
-
+            
 
             if (readyL)
                 signals.Add(new SignalEvent { Time = timeleft, Price = barLow, Side = SignalSide.Buy });
@@ -927,128 +1152,8 @@ namespace EliorStrategy
                 signals.RemoveRange(0, signals.Count - maxSignals);
 
         }
-        public override void OnPaintChart(PaintChartEventArgs args)
-        {
-            // Chart canvas
-            Graphics g = args.Graphics;
-
-            // Converter for Time/Price <-> X/Y
-            var cc = this.CurrentChart?.MainWindow?.CoordinatesConverter; // [web:335]
-            if (cc == null || signals.Count == 0)
-                return;
-
-            // Optional: only draw what’s inside the visible rectangle
-            Rectangle rect = args.Rectangle; // [web:338]
-
-            using var buyBrush = new SolidBrush(Color.Lime);
-            using var sellBrush = new SolidBrush(Color.Red);
-            using var exitBrush = new SolidBrush(Color.Gold);
-
-            foreach (var e in exits)
-            {
-                float x = (float)cc.GetChartX(e.Time);
-                float y = (float)cc.GetChartY(e.Price);
-
-                if (x < rect.Left - 200 || x > rect.Right + 200)
-                    continue;
-
-                // reuse your shapes but different label/color if you want
-                if (e.Side == PosSide.Long)
-                    DrawSellSignal(g, exitBrush, (int)x, (int)y, 12, 12, "x"); // “close long” marker
-                else
-                    DrawBuySignal(g, exitBrush, (int)x, (int)y, 12, 12, "x");  // “close short” marker
-            }
-
-            //Core.Loggers.Log("len sign :" + signals.Count);
-            foreach (var s in signals)
-            {
-
-                float x = (float)cc.GetChartX(s.Time);
-                float y = (float)cc.GetChartY(s.Price) ;
-
-                    // Skip if off-screen
-                    if (x < rect.Left - 200 || x > rect.Right + 200)
-                    continue;
-                //Core.Loggers.Log($"Drawing signal: {s.Side} at {s.Time}, price {s.Price}, coords ({x}, {y})");
-                if (s.Side == SignalSide.Buy)
-                    DrawBuySignal(g, buyBrush, (int)x, (int)y, 15, 15);   // below Low via your offset logic
-                else
-                    DrawSellSignal(g, sellBrush, (int)x, (int)y,15,15); // above High via your offset logic
-            }
-        }
-        protected void DrawBuySignal(Graphics graphics, Brush brush, int x, int y, int size, int offset, string text = "buy")
-        {
-            var centerX = x + this.CurrentChart.BarsWidth / 2;
-            var squareSize = size;
-            var triangleHeight = size / 2;
-
-            // Draw triangle pointing up above the square
-            var trianglePoints = new[]
-            {
-            new Point(centerX - squareSize / 2, y + offset), // Bottom left
-            new Point(centerX, y + offset - triangleHeight), // Top center
-            new Point(centerX + squareSize / 2, y + offset) // Bottom right
-        };
-            graphics.FillPolygon(brush, trianglePoints);
-
-            // Draw square below the triangle (seamlessly attached)
-            var squareY = y + offset;
-            graphics.FillRectangle(
-                brush,
-                centerX - squareSize / 2,
-                squareY,
-                squareSize,
-                squareSize
-            );
-
-            // Draw "Buy" text inside the square
-            using (var textBrush = new SolidBrush(Color.Black))
-            using (var font = new Font("Arial", squareSize / 3, FontStyle.Bold))
-            {
-                var textSize = graphics.MeasureString(text, font);
-                var textX = centerX - (int)(textSize.Width / 2);
-                var textY = squareY + (int)((squareSize - textSize.Height) / 2);
-                graphics.DrawString(text, font, textBrush, textX, textY);
-            }
-        }
-
-
-        protected void DrawSellSignal(Graphics graphics, Brush brush, int x, int y, int size, int offset, string text = "sell")
-        {
-            var centerX = x + this.CurrentChart.BarsWidth / 2;
-            var squareSize = size;
-            var triangleHeight = size / 2;
-
-            // Draw square above the triangle
-            var squareY = y - offset - squareSize;
-            graphics.FillRectangle(
-                brush,
-                centerX - squareSize / 2,
-                squareY,
-                squareSize,
-                squareSize
-            );
-
-            // Draw triangle pointing down below the square (seamlessly attached)
-            var trianglePoints = new[]
-            {
-            new Point(centerX - squareSize / 2, squareY + squareSize), // Top left
-            new Point(centerX, squareY + squareSize + triangleHeight), // Bottom center
-            new Point(centerX + squareSize / 2, squareY + squareSize) // Top right
-            };
-            graphics.FillPolygon(brush, trianglePoints);
-
-            // Draw "Sell" text inside the square
-            using (var textBrush = new SolidBrush(Color.Black))
-            using (var font = new Font("Arial", squareSize / 3, FontStyle.Bold))
-            {
-                
-                var textSize = graphics.MeasureString(text, font);
-                var textX = centerX - (int)(textSize.Width / 2);
-                var textY = squareY + (int)((squareSize - textSize.Height) / 2);
-                graphics.DrawString(text, font, textBrush, textX, textY);
-            }
-        }
+    
+       
 
 
     }
