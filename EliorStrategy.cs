@@ -151,11 +151,11 @@ namespace EliorStrategy
 
         ///eyJhbGciOiJIUzI1NiJ9.eyJzaWduYWxzX3NvdXJjZV9pZCI6MTYwMDM0fQ.MP3MX8E1T51f24xRwj8TwRfK2yryzCC6JoVx1Q3BpiE
         [InputParameter("3Commas Secret", 201)]
-        public string CommasSecret { get; set; } = "testeyJhbGciOiJIUzI1NiJ9.eyJzaWduYWxzX3NvdXJjZV9pZCI6MTYwMDM0fQ.MP3MX8E1T51f24xRwj8TwRfK2yryzCC6JoVx1Q3BpiE";
+        public string CommasSecret { get; set; } = "eyJhbGciOiJIUzI1NiJ9.eyJzaWduYWxzX3NvdXJjZV9pZCI6MTYwMDM0fQ.MP3MX8E1T51f24xRwj8TwRfK2yryzCC6JoVx1Q3BpiE";
 
         //70d1c6f8-95f4-440b-abd4-9a441b28e945
         [InputParameter("Bot UUID", 202)]
-        public string BotUuid { get; set; } = "test70d1c6f8-95f4-440b-abd4-9a441b28e945";
+        public string BotUuid { get; set; } = "70d1c6f8-95f4-440b-abd4-9a441b28e945";
 
 
         public int MinHistoryDepths => 3000;
@@ -451,32 +451,37 @@ namespace EliorStrategy
 
             return avg == 0.0 ? 0.0 : (v / avg) - 1.0;
         }
-        protected double GetTFRatio(int len)
+        protected double GetTFRatio(HistoricalData hist, int len, int offset)
         {
             // Need len bars + 1 previous-close bar
-            if (Count < len + 2)
+            if (hist == null || len <= 0 || hist.Count <= len + 1)
                 return 0.0; // or double.NaN if you prefer Pine-like "na" during warmup
             //Core.Loggers.Log($"hist.Count : {hist.Count} ");
             double sumVol = 0.0;
-
-            for (int i = 1; i <= len; i++)
+            int temp = len;
+            // SMA(volTF, len) over bars [0..len-1] using prev close from [i+1]
+            for (int i = 1; i <= temp; i++)
             {
-                var prevBarClose = Close(i + 1);
-                
-                double trValue = TR(prevBarClose, High(i) , Low(i), Close(i));
-                double vol = VolTF(trValue, Low(i));
+                HistoryItemBar prevbar = (HistoryItemBar)hist[i + 1];
+                double prevBarColse = prevbar.Close;
 
+                HistoryItemBar curBar = (HistoryItemBar)hist[i];
+
+                double trValue = TR(prevBarColse, curBar.High, curBar.Low, curBar.Close);
+                double vol = VolTF(trValue, curBar.Low);
+                //.Loggers.Log(i + " : " + vol);
                 sumVol += vol;
             }
 
+
             double avg = sumVol / len;
-            //Core.Loggers.Log($"Avg VolTF over {len} bars: {avg} ");
-            var curClose = Close(1);
-            var prev = Close(2);
-            double v = VolTF(TR(prev,High(1), Low(1), curClose), Low(1));
 
-            //Core.Loggers.Log($"**Current VolTF: {v}  cur close: {cur.Close}  prev close : {prev.Close}"  );
+            // _v is the CURRENT bar's volTF (bar 0)
+            HistoryItemBar bar1 = (HistoryItemBar)hist[2];
+            var prev = bar1.Close;
+            HistoryItemBar bar0 = (HistoryItemBar)hist[1];
 
+            double v = VolTF(TR(prev, bar0.High, bar0.Low, bar0.Close), bar0.Low);
             return avg == 0.0 ? 0.0 : (v / avg) - 1.0;
         }
 
@@ -636,8 +641,8 @@ namespace EliorStrategy
                 bool emaGateL = !UseEMA || (close > emaTF_val && close > ema1H_val);
                 bool emaGateS = !UseEMA || (close < emaTF_val && close < ema1H_val);
                 //Core.Loggers.Log("emaGateL: " + emaGateL + " , emaGateS: " + emaGateS + ", close : "  + close + " , ematf_val :"+ emaTF_val + " , ema1h_val :" + ema1H_val + " long start :" + longStart + " short start : " + shortStart);
-                double rTF = GetTFRatio(VolTFLen);
-                Core.Loggers.Log("rTF: " + rTF + " mad :" + this.mad);
+                double rTF = GetTFRatio(this.HistoricalData,VolTFLen, 0);
+                //Core.Loggers.Log("rTF: " + rTF + " mad :" + this.mad);
                 //Core.Loggers.Log($"ST: {sTOut.ST} , Dir: {sTOut.Dir} longstart : {longStart} shortstart : {shortStart} rtf : {rTF} emaGatel: {emaGateL} emagates : {emaGateS} close {close}");
                 if (sTOut.Dir < 0)
                     SetValue(sTOut.ST, 1,0);
@@ -1011,10 +1016,10 @@ namespace EliorStrategy
 
             var prevBar = (HistoryItemBar)this.HistoricalData[1];   // previous closed bar
             DateTime prevCloseTimeUtc = prevBar.TimeRight;          // bar end time [web:85]
-            Core.Loggers.Log(
+            //Core.Loggers.Log(
                      
-                       $"rtf : {rTF} r4h: {r4H}  and r1d : {r1D}"
-                   );
+            //           $"rtf : {rTF} r4h: {r4H}  and r1d : {r1D}"
+            //       );
 
             
             bool isLive = false;
